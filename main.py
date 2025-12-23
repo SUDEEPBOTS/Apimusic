@@ -12,7 +12,7 @@ import google.generativeai as genai
 # ─── LOAD ENV ─────────────────────────────
 load_dotenv()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN")          # STORAGE BOT TOKEN
 UPLOAD_CHAT_ID = os.getenv("UPLOAD_CHAT_ID")
 MONGO_URL = os.getenv("MONGO_URL")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
@@ -48,7 +48,6 @@ def gemini_match(text: str) -> str:
     prompt = f"""
 Convert this into best YouTube music search query.
 Only return the query text.
-
 Input: {text}
 """
     res = model.generate_content(prompt)
@@ -69,7 +68,7 @@ def download_song(query: str) -> str:
     )
     return filename
 
-# ─── TELEGRAM UPLOAD ──────────────────────
+# ─── TELEGRAM UPLOAD (STORAGE BOT) ─────────
 def upload_to_telegram(path: str) -> str:
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendAudio"
     with open(path, "rb") as f:
@@ -80,11 +79,21 @@ def upload_to_telegram(path: str) -> str:
         )
     return r.json()["result"]["audio"]["file_id"]
 
+# ─── FILE URL GENERATOR (IMPORTANT FIX) ────
+def get_file_url(file_id: str) -> str:
+    r = requests.get(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/getFile",
+        params={"file_id": file_id}
+    )
+    file_path = r.json()["result"]["file_path"]
+    return f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+
 # ─── BACKGROUND JOB ───────────────────────
 def process_song(user_query: str, final_query: str):
     try:
         path = download_song(final_query)
         file_id = upload_to_telegram(path)
+        file_url = get_file_url(file_id)
 
         songs.update_one(
             {"user_query": user_query},
@@ -92,7 +101,7 @@ def process_song(user_query: str, final_query: str):
                 "$set": {
                     "user_query": user_query,
                     "final_query": final_query,
-                    "file_id": file_id,
+                    "file_url": file_url,
                     "status": "ready"
                 }
             },
@@ -117,37 +126,30 @@ def music_api(data: dict):
     if not raw_query:
         return {"error": "query required"}
 
-    # ✅ NORMALIZE QUERY (CRITICAL FIX)
+    # NORMALIZE
     user_query = raw_query.strip().lower()
 
-    # 1️⃣ Check DB
     song = songs.find_one({"user_query": user_query})
 
     if song:
         if song.get("status") == "ready":
             return {
                 "status": "cached",
-                "file_id": song["file_id"]
+                "file_url": song["file_url"]
             }
         elif song.get("status") == "processing":
             return {"status": "processing"}
         elif song.get("status") == "error":
-            return {"status": "error", "message": "processing failed"}
+            return {"status": "error"}
 
-    # 2️⃣ Mark as processing
     final_query = gemini_match(user_query)
+
     songs.update_one(
         {"user_query": user_query},
-        {
-            "$set": {
-                "status": "processing",
-                "final_query": final_query
-            }
-        },
+        {"$set": {"status": "processing", "final_query": final_query}},
         upsert=True
     )
 
-    # 3️⃣ Start background thread
     threading.Thread(
         target=process_song,
         args=(user_query, final_query),
