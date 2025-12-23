@@ -78,8 +78,7 @@ def upload_to_telegram(path: str) -> str:
             data={"chat_id": UPLOAD_CHAT_ID},
             files={"audio": f}
         )
-    data = r.json()
-    return data["result"]["audio"]["file_id"]
+    return r.json()["result"]["audio"]["file_id"]
 
 # ─── BACKGROUND JOB ───────────────────────
 def process_song(user_query: str, final_query: str):
@@ -102,16 +101,24 @@ def process_song(user_query: str, final_query: str):
     except Exception as e:
         songs.update_one(
             {"user_query": user_query},
-            {"$set": {"status": "error", "error": str(e)}},
+            {
+                "$set": {
+                    "status": "error",
+                    "error": str(e)
+                }
+            },
             upsert=True
         )
 
 # ─── MAIN API ─────────────────────────────
 @app.post("/music")
 def music_api(data: dict):
-    user_query = data.get("query")
-    if not user_query:
+    raw_query = data.get("query")
+    if not raw_query:
         return {"error": "query required"}
+
+    # ✅ NORMALIZE QUERY (CRITICAL FIX)
+    user_query = raw_query.strip().lower()
 
     # 1️⃣ Check DB
     song = songs.find_one({"user_query": user_query})
@@ -124,12 +131,19 @@ def music_api(data: dict):
             }
         elif song.get("status") == "processing":
             return {"status": "processing"}
+        elif song.get("status") == "error":
+            return {"status": "error", "message": "processing failed"}
 
     # 2️⃣ Mark as processing
     final_query = gemini_match(user_query)
     songs.update_one(
         {"user_query": user_query},
-        {"$set": {"status": "processing", "final_query": final_query}},
+        {
+            "$set": {
+                "status": "processing",
+                "final_query": final_query
+            }
+        },
         upsert=True
     )
 
