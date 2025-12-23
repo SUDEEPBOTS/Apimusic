@@ -17,7 +17,7 @@ GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
 # ─── GEMINI ───────────────────────────────
 genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+model = genai.GenerativeModel("gemini-2.5-flash")
 
 # ─── DB ───────────────────────────────────
 client = MongoClient(MONGO_URL)
