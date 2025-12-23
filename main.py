@@ -2,7 +2,8 @@ import os
 import uuid
 import subprocess
 import requests
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
+from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
 from dotenv import load_dotenv
 import google.generativeai as genai
@@ -28,9 +29,17 @@ songs = db.songs
 app = FastAPI()
 os.makedirs("tmp", exist_ok=True)
 
-# ─── HEALTH ───────────────────────────────
-@app.get("/")
-def health():
+# ─── CORS (IMPORTANT FOR HEAD/OPTIONS) ────
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ─── HEALTH (GET + HEAD ALLOWED) ──────────
+@app.api_route("/", methods=["GET", "HEAD", "OPTIONS"])
+def health(response: Response):
     return {"status": "alive"}
 
 # ─── GEMINI MATCH ─────────────────────────
