@@ -2,6 +2,7 @@ import os
 import uuid
 import subprocess
 import requests
+import threading
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
@@ -29,7 +30,7 @@ songs = db.songs
 app = FastAPI()
 os.makedirs("tmp", exist_ok=True)
 
-# ─── CORS (IMPORTANT FOR HEAD/OPTIONS) ────
+# ─── CORS ─────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -37,7 +38,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ─── HEALTH (GET + HEAD ALLOWED) ──────────
+# ─── HEALTH ───────────────────────────────
 @app.api_route("/", methods=["GET", "HEAD", "OPTIONS"])
 def health(response: Response):
     return {"status": "alive"}
@@ -80,6 +81,31 @@ def upload_to_telegram(path: str) -> str:
     data = r.json()
     return data["result"]["audio"]["file_id"]
 
+# ─── BACKGROUND JOB ───────────────────────
+def process_song(user_query: str, final_query: str):
+    try:
+        path = download_song(final_query)
+        file_id = upload_to_telegram(path)
+
+        songs.update_one(
+            {"user_query": user_query},
+            {
+                "$set": {
+                    "user_query": user_query,
+                    "final_query": final_query,
+                    "file_id": file_id,
+                    "status": "ready"
+                }
+            },
+            upsert=True
+        )
+    except Exception as e:
+        songs.update_one(
+            {"user_query": user_query},
+            {"$set": {"status": "error", "error": str(e)}},
+            upsert=True
+        )
+
 # ─── MAIN API ─────────────────────────────
 @app.post("/music")
 def music_api(data: dict):
@@ -87,31 +113,31 @@ def music_api(data: dict):
     if not user_query:
         return {"error": "query required"}
 
-    # 1️⃣ MongoDB check
-    cached = songs.find_one({"user_query": user_query})
-    if cached:
-        return {
-            "status": "cached",
-            "file_id": cached["file_id"]
-        }
+    # 1️⃣ Check DB
+    song = songs.find_one({"user_query": user_query})
 
-    # 2️⃣ Gemini match
+    if song:
+        if song.get("status") == "ready":
+            return {
+                "status": "cached",
+                "file_id": song["file_id"]
+            }
+        elif song.get("status") == "processing":
+            return {"status": "processing"}
+
+    # 2️⃣ Mark as processing
     final_query = gemini_match(user_query)
+    songs.update_one(
+        {"user_query": user_query},
+        {"$set": {"status": "processing", "final_query": final_query}},
+        upsert=True
+    )
 
-    # 3️⃣ Download
-    path = download_song(final_query)
+    # 3️⃣ Start background thread
+    threading.Thread(
+        target=process_song,
+        args=(user_query, final_query),
+        daemon=True
+    ).start()
 
-    # 4️⃣ Upload to Telegram
-    file_id = upload_to_telegram(path)
-
-    # 5️⃣ Save to DB
-    songs.insert_one({
-        "user_query": user_query,
-        "final_query": final_query,
-        "file_id": file_id
-    })
-
-    return {
-        "status": "downloaded",
-        "file_id": file_id
-    }
+    return {"status": "processing"}
