@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+yt-dlp
+pymongo
+python-dotenv
+requests
+google-generativeai
